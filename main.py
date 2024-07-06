@@ -7,6 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver import ActionChains
+from selenium.common.exceptions import NoSuchElementException
 from telegram.ext import ApplicationBuilder
 
 from selenium.webdriver.firefox.options import Options
@@ -122,28 +123,69 @@ async def main():
         print("Polling")
         driver.refresh()
 
-        for notifBadge in driver.find_elements(By.CSS_SELECTOR, ".w3-badge"):
-            parentHref = notifBadge.find_element(By.XPATH, "..").get_attribute("href")
-            notifCount = int(notifBadge.text)
-            if parentHref is not None:
-                idInt = int(parentHref.split("/")[-1])
-                notifType = parentHref.split("/")[-4]
-                previousCount = status[idInt][notifType]
+        for materiaDiv in driver.find_elements(By.CSS_SELECTOR, "div.w3-light-grey"):
+            name: str = materiaDiv.find_element(By.CSS_SELECTOR, ".materia-titulo").text
 
-                if notifCount > previousCount:
-                    status[idInt][notifType] = notifCount
-                    div = notifBadge.find_element(By.XPATH, "../../../..")
-                    if div is not None:
-                        writeFile(".status", status)
-                        async with application:
-                            await sendMessage(
-                                notifType=notifType,
-                                materia=div.find_element(
-                                    By.CLASS_NAME, "materia-titulo"
-                                ).text,
-                                chatId=chatId,
-                                application=application,
-                            )
+            id: str | None = materiaDiv.get_attribute("data-id")
+            idInt: int = 0
+            if id is not None:
+                idInt = int(id)
+
+            contenidosCount = 0
+            mensajeriaCount = 0
+            foroCount = 0
+
+            categories = materiaDiv.find_elements(
+                By.CSS_SELECTOR, ".materia-herramientas>div>a"
+            )
+
+            if len(categories) < 4:
+                continue
+            for i in [0, 2, 3]:
+                try:
+                    badge = categories[i].find_element(By.CSS_SELECTOR, "span")
+                except NoSuchElementException:
+                    continue
+                if badge is not None:
+                    count: int = int(badge.text)
+                    if i == 0:
+                        contenidosCount = count
+                    elif i == 2:
+                        mensajeriaCount = count
+                    elif i == 3:
+                        foroCount = count
+
+            if status[idInt]["contenido"] < contenidosCount:
+                async with application:
+                    await sendMessage(
+                        notifType="contenido",
+                        materia=name,
+                        chatId=chatId,
+                        application=application,
+                    )
+            status[idInt]["contenido"] = contenidosCount
+
+            if status[idInt]["mensajeria"] < mensajeriaCount:
+                async with application:
+                    await sendMessage(
+                        notifType="mensajeria",
+                        materia=name,
+                        chatId=chatId,
+                        application=application,
+                    )
+            status[idInt]["mensajeria"] = mensajeriaCount
+
+            if status[idInt]["forov2"] < foroCount:
+                async with application:
+                    await sendMessage(
+                        notifType="foro",
+                        materia=name,
+                        chatId=chatId,
+                        application=application,
+                    )
+            status[idInt]["forov2"] = foroCount
+            writeFile(".status", status)
+
         try:
             sleep(15)
             # sleep(60 * 15)
