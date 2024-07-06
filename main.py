@@ -17,10 +17,15 @@ class SleepInterruptException(Exception):
 
 
 def sigClose(sig: int, frame: FrameType | None):
-    if status is not None:
-        writeFile(".status", status)
-    if driver is not None:
-        driver.quit()
+    if frame is not None:
+        status = frame.f_locals.get("status")
+        driver = frame.f_locals.get("driver")
+        if status is not None:
+            print("Writing file")
+            writeFile(".status", status)
+        if driver is not None:
+            print("Closing browser")
+            driver.quit()
     raise SleepInterruptException()
 
 
@@ -35,7 +40,7 @@ def writeFile(fileName: str, status: dict[int, dict]):
             f.write(f"{key},{s['contenido']},{s['mensajeria']},{s['forov2']}\n")
 
 
-if __name__ == "__main__":
+async def main():
     signal.signal(signalnum=signal.SIGINT, handler=sigClose)
 
     dni: str = ""
@@ -116,7 +121,7 @@ if __name__ == "__main__":
     while True:
         print("Polling")
         driver.refresh()
-        
+
         for notifBadge in driver.find_elements(By.CSS_SELECTOR, ".w3-badge"):
             parentHref = notifBadge.find_element(By.XPATH, "..").get_attribute("href")
             notifCount = int(notifBadge.text)
@@ -130,8 +135,8 @@ if __name__ == "__main__":
                     div = notifBadge.find_element(By.XPATH, "../../../..")
                     if div is not None:
                         writeFile(".status", status)
-                        asyncio.run(
-                            sendMessage(
+                        async with application:
+                            await sendMessage(
                                 notifType=notifType,
                                 materia=div.find_element(
                                     By.CLASS_NAME, "materia-titulo"
@@ -139,9 +144,12 @@ if __name__ == "__main__":
                                 chatId=chatId,
                                 application=application,
                             )
-                        )
         try:
             sleep(15)
             # sleep(60 * 15)
         except SleepInterruptException:
             exit(0)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
