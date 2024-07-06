@@ -1,3 +1,4 @@
+import asyncio
 import signal
 import re
 from time import sleep
@@ -6,18 +7,25 @@ from selenium.webdriver.common.by import By
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver import ActionChains
+from telegram.ext import ApplicationBuilder
 
-# from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.options import Options
+
+
+class SleepInterruptException(Exception):
+    pass
 
 
 def sigClose(sig: int, frame: FrameType | None):
-    print("Writing file")
-    writeFile(".status", status)
-    exit(0)
+    if status is not None:
+        writeFile(".status", status)
+    if driver is not None:
+        driver.quit()
+    raise SleepInterruptException()
 
 
-def sendMessage(notifType: str, materia: str):
-    print(notifType + " " + materia)
+async def sendMessage(notifType: str, materia: str, chatId: int, application):
+    await application.bot.sendMessage(chat_id=chatId, text=f"{materia}: {notifType}")
 
 
 def writeFile(fileName: str, status: dict[int, dict]):
@@ -26,15 +34,19 @@ def writeFile(fileName: str, status: dict[int, dict]):
             s = status[key]
             f.write(f"{key},{s['contenido']},{s['mensajeria']},{s['forov2']}\n")
 
+
 if __name__ == "__main__":
     signal.signal(signalnum=signal.SIGINT, handler=sigClose)
 
     dni: str = ""
     password: str = ""
     token: str = ""
+    chatId: int = 0
 
     with open(".token") as f:
         token = f.readline()
+        token = token.strip()
+        chatId = int(f.readline())
 
     with open(".credentials") as f:
         dni = f.readline()
@@ -48,7 +60,11 @@ if __name__ == "__main__":
         print("Contraseña incorrecta")
         exit(1)
 
-    driver: webdriver.Firefox = webdriver.Firefox()
+    application = ApplicationBuilder().token(token).build()
+
+    options: Options = Options()
+    options.add_argument("--headless")
+    driver: webdriver.Firefox = webdriver.Firefox(options=options)
     driver.get("https://miel.unlam.edu.ar")
     ActionChains(driver=driver).send_keys_to_element(
         driver.find_element(By.ID, "usuario"), dni
@@ -98,7 +114,9 @@ if __name__ == "__main__":
                     break
 
     while True:
-        driver.refresh
+        print("Polling")
+        driver.refresh()
+        
         for notifBadge in driver.find_elements(By.CSS_SELECTOR, ".w3-badge"):
             parentHref = notifBadge.find_element(By.XPATH, "..").get_attribute("href")
             notifCount = int(notifBadge.text)
@@ -112,11 +130,18 @@ if __name__ == "__main__":
                     div = notifBadge.find_element(By.XPATH, "../../../..")
                     if div is not None:
                         writeFile(".status", status)
-                        sendMessage(
-                            notifType=notifType,
-                            materia=div.find_element(
-                                By.CLASS_NAME, "materia-titulo"
-                            ).text,
+                        asyncio.run(
+                            sendMessage(
+                                notifType=notifType,
+                                materia=div.find_element(
+                                    By.CLASS_NAME, "materia-titulo"
+                                ).text,
+                                chatId=chatId,
+                                application=application,
+                            )
                         )
-
-        sleep(60 * 15)
+        try:
+            sleep(15)
+            # sleep(60 * 15)
+        except SleepInterruptException:
+            exit(0)
