@@ -8,17 +8,15 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.firefox.options import Options
 from telegram.ext import ApplicationBuilder, CommandHandler, Application
-from botfunctions import poll_miel, oferta, notas, write_file
+from botfunctions import poll_miel, oferta, notas, finales, write_file
 
 
 async def post_init(application: Application):
     await application.bot.set_my_commands(
         [
             ("oferta", "Realiza una consulta a la oferta de materias"),
-            (
-                "notas",
-                "Realiza una consulta a tus notas",
-            ),
+            ("notas", "Realiza una consulta a tus notas"),
+            ("finales", "Realiza una consulta a las fechas de finales"),
         ]
     )
 
@@ -97,7 +95,7 @@ def load_status(driver: webdriver.Firefox) -> dict[int, dict[str, int]]:
 
 def update_intraconsulta(
     driver: webdriver.Firefox, dni: int, password: str
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     original_window = driver.current_window_handle
     driver.switch_to.new_window("tab")
     driver.get("https://alumno2.unlam.edu.ar/")
@@ -129,10 +127,20 @@ def update_intraconsulta(
         "outerHTML"
     )
 
+    driver.execute_script("document.querySelector('#link04').click()")
+
+    WebDriverWait(driver, 10).until(
+        lambda e: e.find_element(By.PARTIAL_LINK_TEXT, "Cerrar ventana")
+    )
+
+    finales_table: str = driver.find_elements(By.TAG_NAME, "table")[1].get_attribute(
+        "outerHTML"
+    )
+
     driver.close()
     driver.switch_to.window(original_window)
 
-    return (oferta_table, notas_table)
+    return (oferta_table, notas_table, finales_table)
 
 
 if __name__ == "__main__":
@@ -163,7 +171,7 @@ if __name__ == "__main__":
 
     status = load_status(driver=driver)
 
-    (oferta_table, notas_table) = update_intraconsulta(
+    (oferta_table, notas_table, finales_table) = update_intraconsulta(
         driver=driver, dni=dni, password=password
     )
 
@@ -177,8 +185,13 @@ if __name__ == "__main__":
         "notas", partial(notas, html=notas_table, chat_id=chat_id)
     )
 
+    finales_handler = CommandHandler(
+        "finales", partial(finales, html=finales_table, chat_id=chat_id)
+    )
+
     application.add_handler(oferta_handler)
     application.add_handler(notas_handler)
+    application.add_handler(finales_handler)
 
     job_queue = application.job_queue
 

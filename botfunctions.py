@@ -33,7 +33,7 @@ def write_file(fileName: str, status: dict[int, dict]):
             f.write(f"{key},{s['contenido']},{s['mensajeria']},{s['forov2']}\n")
 
 
-def get_close_match_row_idx(materia: str, df: DataFrame, row_name: str) -> int:
+def get_row_idx_from_close_match(materia: str, df: DataFrame, row_name: str) -> int:
     index = df.index[df[row_name] == materia]
     if len(index) > 0:
         return index[0]
@@ -97,7 +97,7 @@ async def oferta(
 
     num_rows: int = df.shape[0]
 
-    idx: int = get_close_match_row_idx(materia, df, "Descripción")
+    idx: int = get_row_idx_from_close_match(materia, df, "Descripción")
 
     if idx == -1:
         await context.bot.send_message(
@@ -154,7 +154,7 @@ async def notas(
         else:
             materia: str = clean_materia(" ".join(context.args))
 
-            idx: int = get_close_match_row_idx(materia, df, "Materia")
+            idx: int = get_row_idx_from_close_match(materia, df, "Materia")
 
             if idx == -1:
                 await context.bot.send_message(
@@ -175,6 +175,63 @@ async def notas(
     for i in range(num_rows - n, num_rows):
         row = df.iloc[i]
         msg_data = msg_data + f"""{row["Materia"].strip()}\t{row["Nota"]}\n"""
+
+    await context.bot.send_message(chat_id=chat_id, text=msg_data)
+
+
+async def finales(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, html: str, chat_id: int
+):
+    if len(context.args) > 0:
+        materia = " ".join(context.args)
+        materia = clean_materia(materia)
+    else:
+        await context.bot.send_message(
+            chat_id=chat_id, text="El comando debe ser: /finales <nombre-materia>"
+        )
+        return
+
+    df: DataFrame = create_df_from_html_table(
+        html,
+        [
+            "Código",
+            "Descripción",
+            "Llamado",
+            "Fecha",
+            "Hora",
+            "Modalidad",
+            "Tipo Mesa",
+            "Observaciones",
+        ],
+    )
+
+    df["Código"] = df["Código"].apply(lambda s: int(s) if s.isdigit() else 0)
+    df["Descripción"] = df["Descripción"].apply(lambda s: s.strip())
+
+    num_rows: int = df.shape[0]
+
+    idx: int = get_row_idx_from_close_match(materia, df, "Descripción")
+
+    if idx == -1:
+        await context.bot.send_message(
+            chat_id=chat_id, text="No se encontro la materia"
+        )
+        return
+
+    row = df.iloc[idx]
+    cod: int = row["Código"]
+
+    msg_data: str = f"""Codigo: {cod}\n{row["Descripción"]}\nFechas:\n"""
+    msg_data = (
+        msg_data + f"""Llamado: {row["Llamado"]}\t|{row["Fecha"]}||{row["Hora"]}|"""
+    )
+    if idx + 1 < num_rows:
+        row = df.iloc[idx + 1]
+        if row["Código"] == 0:
+            msg_data = (
+                msg_data
+                + f"""\nLlamado: {row["Llamado"]}\t|{row["Fecha"]}||{row["Hora"]}|"""
+            )
 
     await context.bot.send_message(chat_id=chat_id, text=msg_data)
 
