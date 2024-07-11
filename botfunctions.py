@@ -9,6 +9,23 @@ from pandas import DataFrame
 import re
 
 
+def create_df_from_html_table(html: str, columns: list[str]) -> DataFrame:
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.table
+
+    table_rows = table.find_all("tr")
+
+    res = []
+    for tr in table_rows:
+        td = tr.find_all("td")
+        row = [tr.text for tr in td if tr]
+        if row:
+            res.append(row)
+
+    df: DataFrame = DataFrame(res, columns=columns)
+    return df
+
+
 def write_file(fileName: str, status: dict[int, dict]):
     with open(fileName, "w") as f:
         for key in status.keys():
@@ -62,21 +79,9 @@ async def oferta(
         )
         return
 
-    soup = BeautifulSoup(html, "html.parser")
-    table = soup.table
-
-    table_rows = table.find_all("tr")
-
-    res = []
-    for tr in table_rows:
-        td = tr.find_all("td")
-        row = [tr.text for tr in td if tr]
-        if row:
-            res.append(row)
-
-    df: DataFrame = DataFrame(
-        res,
-        columns=[
+    df: DataFrame = create_df_from_html_table(
+        html,
+        [
             "Código",
             "Descripción",
             "Cod. Comisión",
@@ -127,21 +132,9 @@ async def notas(
 ):
     n: int = 5
 
-    soup = BeautifulSoup(html, "html.parser")
-    table = soup.table
-
-    table_rows = table.find_all("tr")
-
-    res = []
-    for tr in table_rows:
-        td = tr.find_all("td")
-        row = [tr.text for tr in td if tr]
-        if row:
-            res.append(row)
-
-    df: DataFrame = DataFrame(
-        res,
-        columns=[
+    df: DataFrame = create_df_from_html_table(
+        html,
+        [
             "Código",
             "Materia",
             "Fecha",
