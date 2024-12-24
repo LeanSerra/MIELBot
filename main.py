@@ -1,73 +1,42 @@
-import asyncio
 import signal
-import re
-from time import sleep
+from functools import partial
 from types import FrameType
-from selenium.webdriver.common.by import By
 from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
 from selenium.webdriver import ActionChains
-from selenium.common.exceptions import NoSuchElementException
-from telegram.ext import ApplicationBuilder
-
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.firefox.options import Options
+from telegram.ext import ApplicationBuilder, CommandHandler, Application
+from botfunctions import poll_miel, oferta, notas, finales, write_file
 
 
-class SleepInterruptException(Exception):
-    pass
+async def post_init(application: Application):
+    await application.bot.set_my_commands(
+        [
+            ("oferta", "Realiza una consulta a la oferta de materias"),
+            ("notas", "Realiza una consulta a tus notas"),
+            ("finales", "Realiza una consulta a las fechas de finales"),
+        ]
+    )
 
 
-def sigClose(sig: int, frame: FrameType | None):
+def sig_close(sig: int, frame: FrameType | None):
+    print("Closing")
     if frame is not None:
         status = frame.f_locals.get("status")
         driver = frame.f_locals.get("driver")
         if status is not None:
             print("Writing file")
-            writeFile(".status", status)
+            write_file(".status", status)
         if driver is not None:
             print("Closing browser")
             driver.quit()
-    raise SleepInterruptException()
+    exit(0)
 
 
-async def sendMessage(notifType: str, materia: str, chatId: int, application):
-    await application.bot.sendMessage(chat_id=chatId, text=f"{materia}: {notifType}")
-
-
-def writeFile(fileName: str, status: dict[int, dict]):
-    with open(fileName, "w") as f:
-        for key in status.keys():
-            s = status[key]
-            f.write(f"{key},{s['contenido']},{s['mensajeria']},{s['forov2']}\n")
-
-
-async def main():
-    signal.signal(signalnum=signal.SIGINT, handler=sigClose)
-
-    dni: str = ""
-    password: str = ""
-    token: str = ""
-    chatId: int = 0
-
-    with open(".token") as f:
-        token = f.readline()
-        token = token.strip()
-        chatId = int(f.readline())
-
-    with open(".credentials") as f:
-        dni = f.readline()
-        password = f.readline()
-
-    if not re.search("[0-9]{3,3}?[0-9]{3,3}?[0-9]{1,2}", dni):
-        print("DNI incorrecto")
-        exit(1)
-
-    if len(password) < 8:
-        print("Contraseña incorrecta")
-        exit(1)
-
-    application = ApplicationBuilder().token(token).build()
-
+def init_driver(dni: str, password: str) -> webdriver.Firefox:
+    print("Initializing driver")
     options: Options = Options()
     options.add_argument("--headless")
     driver: webdriver.Firefox = webdriver.Firefox(options=options)
@@ -78,28 +47,31 @@ async def main():
         Keys.RETURN
     ).perform()
 
-    sleep(1)
-
-    driver.get("https://miel.unlam.edu.ar/principal/interno/")
+    WebDriverWait(driver, 15).until(lambda e: e.find_element(By.ID, "menu-principal"))
 
     if driver.current_url != "https://miel.unlam.edu.ar/principal/interno/":
         print("No se pudo iniciar sesion")
         driver.close()
         exit(1)
 
-    elementIds = [
+    return driver
+
+
+def load_status(driver: webdriver.Firefox) -> dict[int, dict[str, int]]:
+    print("loading status")
+    element_ids = [
         element.get_attribute("data-id")
         for element in driver.find_elements(
             By.CSS_SELECTOR, "body main div.curso-sortable div[data-id]"
         )
     ]
 
-    status: dict[int, dict] = {}
+    status: dict[int, dict[str, int]] = {}
 
-    for i, id in enumerate(elementIds):
+    for id in element_ids:
         if id is not None:
-            idInt = int(id)
-            status[idInt] = {
+            id_int = int(id)
+            status[id_int] = {
                 "contenido": 0,
                 "mensajeria": 0,
                 "forov2": 0,
@@ -107,7 +79,7 @@ async def main():
 
     with open(".status", "+a") as f:
         f.seek(0)
-        for i, line in enumerate(f.readlines()):
+        for line in f.readlines():
             parts: list[str] = line.split(",")
             if len(parts) == 4:
                 currentID = int(parts[0])
@@ -118,80 +90,123 @@ async def main():
                 else:
                     f.truncate(0)
                     break
+    return status
 
-    while True:
-        print("Polling")
-        driver.refresh()
 
-        for materiaDiv in driver.find_elements(By.CSS_SELECTOR, "div.w3-light-grey"):
-            name: str = materiaDiv.find_element(By.CSS_SELECTOR, ".materia-titulo").text
+def update_intraconsulta(
+    driver: webdriver.Firefox, dni: int, password: str
+) -> tuple[str, str, str]:
+    original_window = driver.current_window_handle
+    driver.switch_to.new_window("tab")
+    driver.get("https://alumno2.unlam.edu.ar/")
+    ActionChains(driver=driver).send_keys_to_element(
+        driver.find_element(By.ID, "usuario"), dni
+    ).send_keys_to_element(driver.find_element(By.ID, "clave"), password).send_keys(
+        Keys.RETURN
+    ).perform()
 
-            id: str | None = materiaDiv.get_attribute("data-id")
-            idInt: int = 0
-            if id is not None:
-                idInt = int(id)
+    WebDriverWait(driver, 10).until(
+        lambda e: e.find_element(By.CSS_SELECTOR, ".nav-pills")
+    )
 
-            contenidosCount = 0
-            mensajeriaCount = 0
-            foroCount = 0
+    driver.execute_script("document.querySelector('#link03').click()")
 
-            categories = materiaDiv.find_elements(
-                By.CSS_SELECTOR, ".materia-herramientas>div>a"
-            )
+    WebDriverWait(driver, 10).until(lambda e: e.find_element(By.TAG_NAME, "table"))
 
-            if len(categories) < 4:
-                continue
-            for i in [0, 2, 3]:
-                try:
-                    badge = categories[i].find_element(By.CSS_SELECTOR, "span")
-                except NoSuchElementException:
-                    continue
-                if badge is not None:
-                    count: int = int(badge.text)
-                    if i == 0:
-                        contenidosCount = count
-                    elif i == 2:
-                        mensajeriaCount = count
-                    elif i == 3:
-                        foroCount = count
+    oferta_table: str = driver.find_element(By.TAG_NAME, "table").get_attribute(
+        "outerHTML"
+    )
 
-            if status[idInt]["contenido"] < contenidosCount:
-                async with application:
-                    await sendMessage(
-                        notifType="contenido",
-                        materia=name,
-                        chatId=chatId,
-                        application=application,
-                    )
-            status[idInt]["contenido"] = contenidosCount
+    driver.execute_script("document.querySelector('#link11').click()")
 
-            if status[idInt]["mensajeria"] < mensajeriaCount:
-                async with application:
-                    await sendMessage(
-                        notifType="mensajeria",
-                        materia=name,
-                        chatId=chatId,
-                        application=application,
-                    )
-            status[idInt]["mensajeria"] = mensajeriaCount
+    WebDriverWait(driver, 10).until(
+        lambda e: e.find_element(By.PARTIAL_LINK_TEXT, "Consultar Finales Desaprobados")
+    )
 
-            if status[idInt]["forov2"] < foroCount:
-                async with application:
-                    await sendMessage(
-                        notifType="foro",
-                        materia=name,
-                        chatId=chatId,
-                        application=application,
-                    )
-            status[idInt]["forov2"] = foroCount
-            writeFile(".status", status)
+    notas_table: str = driver.find_element(By.TAG_NAME, "table").get_attribute(
+        "outerHTML"
+    )
 
-        try:
-            sleep(15)
-            # sleep(60 * 15)
-        except SleepInterruptException:
-            exit(0)
+    driver.execute_script("document.querySelector('#link04').click()")
+
+    WebDriverWait(driver, 10).until(
+        lambda e: e.find_element(By.PARTIAL_LINK_TEXT, "Cerrar ventana")
+    )
+
+    finales_table: str = driver.find_elements(By.TAG_NAME, "table")[1].get_attribute(
+        "outerHTML"
+    )
+
+    driver.close()
+    driver.switch_to.window(original_window)
+
+    return (oferta_table, notas_table, finales_table)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    signal.signal(signalnum=signal.SIGINT, handler=sig_close)
+
+    dni: str = ""
+    password: str = ""
+    token: str = ""
+    chat_id: int = 0
+
+    with open(".token") as f:
+        token = f.readline().strip()
+        chat_id = int(f.readline())
+
+    with open(".credentials") as f:
+        dni = f.readline().strip()
+        password = f.readline()
+
+    if not dni.isdigit() or int(dni) < 1000000 or int(dni) > 99999999:
+        print("DNI incorrecto")
+        exit(1)
+
+    if len(password) < 8:
+        print("Contraseña incorrecta")
+        exit(1)
+
+    driver = init_driver(dni=dni, password=password)
+
+    status = load_status(driver=driver)
+
+    (oferta_table, notas_table, finales_table) = update_intraconsulta(
+        driver=driver, dni=dni, password=password
+    )
+
+    application = ApplicationBuilder().token(token).post_init(post_init).build()
+
+    oferta_handler = CommandHandler(
+        "oferta", partial(oferta, html=oferta_table, chat_id=chat_id)
+    )
+
+    notas_handler = CommandHandler(
+        "notas", partial(notas, html=notas_table, chat_id=chat_id)
+    )
+
+    finales_handler = CommandHandler(
+        "finales", partial(finales, html=finales_table, chat_id=chat_id)
+    )
+
+    application.add_handler(oferta_handler)
+    application.add_handler(notas_handler)
+    application.add_handler(finales_handler)
+
+    job_queue = application.job_queue
+
+    job_queue.run_repeating(
+        poll_miel,
+        interval=60,
+        first=0,
+        data={
+            "driver": driver,
+            "status": status,
+            "application": application,
+            "chatId": chat_id,
+        },
+    )
+
+    print("Bot listening to commands")
+
+    application.run_polling()
